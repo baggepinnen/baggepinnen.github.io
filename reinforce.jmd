@@ -1,7 +1,7 @@
 # Reinforcement learning algorithms
 
 ## Q-learning with ϵ-greedy exploration
-This tutorial is available as an [iJulia notebook]()
+This tutorial is available as an [iJulia notebook](https://github.com/baggepinnen/baggepinnen.github.io/blob/master/reinforce.ipynb)
 
 We start out but importing some packages.
 ```julia
@@ -69,16 +69,16 @@ type ϵGreedyPolicy <: AbstractPolicy
     decay_rate::Float64
 end
 """Calling this function decays the ϵ"""
-function decay!(policy::ϵGreedyPolicy)
+function decayϵ!(policy::ϵGreedyPolicy)
     policy.ϵ *= policy.decay_rate
 end
 """This is our ϵ-greedy action function"""
 function Reinforce.action(policy::ϵGreedyPolicy, r, s, A)
     rand() < policy.ϵ ? rand(0:1) : Q(s,1) > Q(s,0) ? 1 : 0
 end
-"""This method is not required by Reinforce.jl, but we define it to be able to calculate an action witout random exploration"""
-function Reinforce.action(policy::ϵGreedyPolicy, s)
-    rand() < Q(s,1) > Q(s,0) ? 1 : 0
+"""max(Q(s,a)) over a"""
+function max_a(Q, s)
+    max(Q(s,1), Q(s,0))
 end
 
 const policy = ϵGreedyPolicy(ϵ, decay_rate)
@@ -94,11 +94,10 @@ function Qlearning(num_episodes,α)
     for i = 1:num_episodes
         ep = Episode(env, policy)
         α *= decay_rate # Decay the learning rate
-        decay!(policy) # Decay greedyness
+        decayϵ!(policy) # Decay greedyness
         for (s::Vector{Float64},a::Int,r::Float64,s1::Vector{Float64}) in ep
-            a1 = action(policy,s1)
             # i % 100 == 0 && OpenAIGym.render(env) # Uncomment this line to have the episode rendered
-            Q[s,a] = α*(r + γ*Q(s1,a1) - Q(s,a)) # Update the Q-function approximator using Q-learning
+            Q[s,a] = α*(r + γ*max_a(Q, s1) - Q(s,a)) # Update the Q-function approximator using Q-learning
         end
         push!(reward_history, i, ep.total_reward)
         i % 10 == 0 && println("Episode: $i, reward: $(ep.total_reward)")
