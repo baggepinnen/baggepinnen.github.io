@@ -82,12 +82,13 @@ struct BoltzmannPolicy <: AbstractPolicy end
 function decay!(policy::ϵGreedyPolicy)
     policy.ϵ *= policy.decay_rate
 end
+decay!(policy) = nothing
 """This is our ϵ-greedy action function"""
 function Reinforce.action(policy::ϵGreedyPolicy, r, s, A)
     rand() < policy.ϵ ? rand(0:1) : Q(s,1) > Q(s,0) ? 1 : 0
 end
 """This is our Boltzmann exploration action function"""
-function Reinforce.action(policy::BolzmannPolicy, r, s, A)
+function Reinforce.action(policy::BoltzmannPolicy, r, s, A)
     Q1,Q0 = Q(s,1), Q(s,0)
     prob1 = exp(Q1)/(exp(Q1)+exp(Q0))
     rand() < probs[1] ? 1 : 0
@@ -98,7 +99,7 @@ function max_a(Q, s)
 end
 
 # const policy = ϵGreedyPolicy(ϵ, decay_rate)
-const policy = BolzmannPolicy()
+const policy = BoltzmannPolicy()
 ```
 We have now arrived at the main algorithm. We wrap it in a function for the Julia JIT complier to have it run faster.
 ```{julia}
