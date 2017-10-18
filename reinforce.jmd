@@ -1,14 +1,23 @@
 # Reinforcement learning algorithms
 
 ## Q-learning with ϵ-greedy exploration
-This tutorial is available as an [iJulia notebook](https://github.com/baggepinnen/baggepinnen.github.io/blob/master/reinforce.ipynb)
+This tutorial is available as an [iJulia notebook]()
 
-We start out but importing some packages.
+We start out by importing some packages. If it's your first time, you might have to install some packages using the commands in the initial comment.
+OpenAI gym is installed with instructions available at https://gym.openai.com/docs/
 ```julia
+# Pkg.clone("https://github.com/tbreloff/MetaPkg.jl")
+# using MetaPkg
+# meta_add("MetaRL")
+# Pkg.add("Plots")
+# Pkg.add("BasisFunctionExpansions")
+# Pkg.add("ValueHistories")
+
 using OpenAIGym, BasisFunctionExpansions, ValueHistories, Plots
 ```
 
-```{julia;echo=false}
+If you want to perform plotting in the loop, the following function helps keeping the plot clean.
+```{julia;echo=true}
 default(size=(1200,800)) # Set the default plot size
 function update_plot!(p; max_history = 10, attribute = :markercolor)
     num_series = length(p.series_list)
@@ -29,7 +38,7 @@ function update_plot!(p; max_history = 10, attribute = :markercolor)
 end
 ```
 
-Next, we define an environment from the OpenAIGym framework
+Next, we define an environment from the OpenAIGym framework, we'll use the [cartpole environment](https://gym.openai.com/envs/CartPole-v0/)
 ```julia
 env = GymEnv("CartPole-v0")
 ```
@@ -38,7 +47,7 @@ We also define a $Q$-function approximator that is a linear combination of radia
 ```{julia}
 bfe = MultiUniformRBFE([linspace(-0.3,0.3) linspace(-2,2) linspace(-0.2,0.2) linspace(-3.2,3.2) linspace(0,1)], [4,4,4,4,2])
 
-type Qfun
+struct Qfun
     θ::Vector{Float64}
     bfe::MultiUniformRBFE
 end
@@ -69,7 +78,7 @@ type ϵGreedyPolicy <: AbstractPolicy
     decay_rate::Float64
 end
 """Calling this function decays the ϵ"""
-function decayϵ!(policy::ϵGreedyPolicy)
+function decay!(policy::ϵGreedyPolicy)
     policy.ϵ *= policy.decay_rate
 end
 """This is our ϵ-greedy action function"""
@@ -86,16 +95,18 @@ const policy = ϵGreedyPolicy(ϵ, decay_rate)
 We have now arrived at the main algorithm. We wrap it in a function for the Julia JIT complier to have it run faster.
 ```{julia}
 pyplot() # Enable the pyplot backend, try gr insted if pyplot is slow
-# gr()
-fig = plot(layout=2)
-plotting = false # Set to true to plot continuously
+plotting = true # Set to true to plot continuously
+if plotting
+    # gr()
+    fig = plot(layout=2)
+end
 function Qlearning(num_episodes,α)
     reward_history = ValueHistories.History(Float64)
     for i = 1:num_episodes
         ep = Episode(env, policy)
         α *= decay_rate # Decay the learning rate
-        decayϵ!(policy) # Decay greedyness
-        for (s::Vector{Float64},a::Int,r::Float64,s1::Vector{Float64}) in ep
+        decay!(policy) # Decay greedyness
+        for (s,a,r,s1) in ep # An episode object is iterable
             # i % 100 == 0 && OpenAIGym.render(env) # Uncomment this line to have the episode rendered
             Q[s,a] = α*(r + γ*max_a(Q, s1) - Q(s,a)) # Update the Q-function approximator using Q-learning
         end
@@ -103,7 +114,7 @@ function Qlearning(num_episodes,α)
         i % 10 == 0 && println("Episode: $i, reward: $(ep.total_reward)")
         if plotting && i % 10 == 0
             plot!(reward_history, subplot=1)
-            scatter!(Q.θ, subplot=2, c=:red)
+            scatter!(Q.θ, subplot=2, c=:red, title="Policy parameters")
             update_plot!(fig[1], max_history=1, attribute=:linecolor)
             update_plot!(fig[2], max_history=5, attribute=:linecolor)
             gui(fig)
