@@ -1,6 +1,6 @@
 # Reinforcement learning algorithms
 
-## Q-learning with ϵ-greedy or Boltzmann exploration
+## Q-learning with ϵ-greedy
 This tutorial is available as an [iJulia notebook]()
 
 We start out by importing some packages. If it's your first time, you might have to install some packages using the commands in the initial comment.
@@ -71,45 +71,37 @@ const decay_rate = 0.995 # decay rate for learning rate and ϵ
 const γ          = 0.99  # Discounting factor
 ```
 
-The next step is to define two `Reinforce.jl` policy types
+The next step is to define a `Reinforce.jl` policy type
 ```{julia}
-struct ϵGreedyPolicy <: AbstractPolicy
+mutable struct ϵGreedyPolicy <: AbstractPolicy
     ϵ::Float64
     decay_rate::Float64
 end
-struct BoltzmannPolicy <: AbstractPolicy end
+
 """Calling this function decays the ϵ"""
 function decay!(policy::ϵGreedyPolicy)
     policy.ϵ *= policy.decay_rate
 end
-decay!(policy) = nothing
+
 """This is our ϵ-greedy action function"""
 function Reinforce.action(policy::ϵGreedyPolicy, r, s, A)
     rand() < policy.ϵ ? rand(0:1) : Q(s,1) > Q(s,0) ? 1 : 0
 end
-"""This is our Boltzmann exploration action function"""
-function Reinforce.action(policy::BoltzmannPolicy, r, s, A)
-    Q1,Q0 = Q(s,1), Q(s,0)
-    prob1 = exp(Q1)/(exp(Q1)+exp(Q0))
-    rand() < probs[1] ? 1 : 0
-end
+
 """max(Q(s,a)) over a"""
 function max_a(Q, s)
     max(Q(s,1), Q(s,0))
 end
 
-# const policy = ϵGreedyPolicy(ϵ, decay_rate)
-const policy = BoltzmannPolicy()
+policy = ϵGreedyPolicy(ϵ, decay_rate)
 ```
 We have now arrived at the main algorithm. We wrap it in a function for the Julia JIT complier to have it run faster.
 ```{julia}
 pyplot() # Enable the pyplot backend, try gr insted if pyplot is slow
-plotting = true # Set to true to plot continuously
-if plotting
-    # gr()
-    fig = plot(layout=2)
-end
-function Qlearning(num_episodes,α)
+# gr()
+
+function Qlearning(policy, num_episodes, α; plotting=true)
+    plotting && (fig = plot(layout=2, show=true))
     reward_history = ValueHistories.History(Float64)
     for i = 1:num_episodes
         ep = Episode(env, policy)
@@ -120,8 +112,8 @@ function Qlearning(num_episodes,α)
             Q[s,a] = α*(r + γ*max_a(Q, s1) - Q(s,a)) # Update the Q-function approximator using Q-learning
         end
         push!(reward_history, i, ep.total_reward)
-        i % 10 == 0 && println("Episode: $i, reward: $(ep.total_reward)")
-        if plotting && i % 10 == 0
+        i % 20 == 0 && println("Episode: $i, reward: $(ep.total_reward)")
+        if plotting && i % 20 == 0
             plot!(reward_history, subplot=1)
             scatter!(Q.θ, subplot=2, c=:red, title="Policy parameters")
             update_plot!(fig[1], max_history=1, attribute=:linecolor)
@@ -134,5 +126,30 @@ end
 ```
 We now call our function.
 ```{julia;term=true}
-@time Qlearning(num_episodes,α)
+@time Qlearning(policy, num_episodes, α, plotting = false)
 ```
+
+
+## Boltzmann exploration
+The ϵ-greedy works well and learns to achieve maximum reward after a few hundred iterations.
+A different policy, that works well for discrete action spaces is Boltzmann exploration.
+Consider the policy $π(a|s) = \exp(Q(s,a))/\sum_a(Q(s,a))$, it will sample an action based on how good Q-value it has. This ensures that all actions that have some possibility to be good are sampled, but actions known to be very good are sampled more often.
+```{julia;term=false}
+struct BoltzmannPolicy <: AbstractPolicy end
+
+decay!(policy) = nothing
+
+"""This is our Boltzmann exploration action function"""
+function Reinforce.action(policy::BoltzmannPolicy, r, s, A)
+    Q1,Q0 = Q(s,1), Q(s,0)
+    prob1 = exp(Q1)/(exp(Q1)+exp(Q0))
+    rand() < prob1 ? 1 : 0
+end
+
+policy = BoltzmannPolicy()
+Q.θ  .*= 0 # Reset Q-function
+```
+```{julia;term=true}
+@time Qlearning(policy, num_episodes, α, plotting = false)
+```
+The Boltzmann exploration typically works better than ϵ-greedy in this environment.
