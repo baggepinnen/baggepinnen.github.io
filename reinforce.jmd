@@ -133,8 +133,8 @@ We now call our function.
 ## Boltzmann exploration
 The ϵ-greedy works well and learns to achieve maximum reward after a few hundred iterations.
 A different policy, that works well for discrete action spaces is Boltzmann exploration.
-Consider the policy $π(a|s) = \exp(Q(s,a))/\sum_a(Q(s,a))$, it will sample an action based on how good Q-value it has. This ensures that all actions that have some possibility to be good are sampled, but actions known to be very good are sampled more often.
-```{julia;term=false}
+Consider the policy $π(a|s) = \exp(Q(s,a))/\sum_a \exp(Q(s,a))$, it will sample an action based on how good Q-value it has. This ensures that all actions that have some possibility to be good are sampled, but actions known to be very good are sampled more often.
+```julia
 struct BoltzmannPolicy <: AbstractPolicy end
 
 decay!(policy) = nothing
