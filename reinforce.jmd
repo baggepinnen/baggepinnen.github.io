@@ -20,20 +20,11 @@ using OpenAIGym, BasisFunctionExpansions, ValueHistories, Plots
 If you want to perform plotting in the loop, the following function helps keeping the plot clean.
 ```{julia;echo=true}
 default(size=(1200,800)) # Set the default plot size
-function update_plot!(p; max_history = 10, attribute = :markercolor)
+function update_plot!(p; max_history = 10)
     num_series = length(p.series_list)
     if num_series > 1
         if num_series > max_history
             deleteat!(p.series_list,1:num_series-max_history)
-        end
-        for i = 1:min(max_history, num_series)-1
-            alpha = 1-2/max_history
-            c = p[i][attribute]
-            b = alpha*c.b + (1-alpha)*0.5
-            g = alpha*c.g + (1-alpha)*0.5
-            r = alpha*c.r + (1-alpha)*0.5
-            a = alpha*c.alpha
-            p[i][attribute] = RGBA(r,g,b,a)
         end
     end
 end
@@ -113,8 +104,8 @@ function REINFORCE(π, num_epochs, N, α; plotting=true)
         if plotting && i % 5 == 0
             plot!(reward_history, subplot=1)
             scatter!(π.θ, subplot=2, c=:red, title="Policy parameters")
-            update_plot!(fig[1], max_history=1, attribute=:linecolor)
-            update_plot!(fig[2], max_history=5, attribute=:linecolor)
+            update_plot!(fig[1], max_history=1)
+            update_plot!(fig[2], max_history=5)
             gui(fig)
         end
     end

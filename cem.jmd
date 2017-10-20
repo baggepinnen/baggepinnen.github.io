@@ -2,8 +2,9 @@
 
 CEM performs a policy search with exploration directly in parameter space. A collection of sample policies are sampled from a distribution and tried through experiments. A new, weighted distribution is fit to the sampled policy parameters, where the reward achieved by the policy determines its weight. This way, policies that achieved high rewards are more likely to be sampled next time. This procedure is iterated until performance is adequate.
 
-We focus on Gaussian distributions in parameter space, and illustrate two methods of fitting
-new weighted distributions: rank-based and Boltzmann-based. The rank-based fit fits and unweighted Gaussian to the top fraction of policies, whereas the Boltzmann-based strategy assigns a weights of $\exp(r_i)$ to policy $i$, where $r_i$ is the reward achieved by that policy.
+CEM works well when simulation is computationally cheap and the parameter dimension is small. We therefore use a linear combination of the states as policy in this example, since the linear combination of basis function leads to a high-dimensional parameter space.
+
+We focus on Gaussian distributions to represent policy distributions in parameter space, and illustrate two methods of fitting new weighted distributions: rank-based and Boltzmann-based. The rank-based fit fits and unweighted Gaussian to the top fraction of policies, whereas the Boltzmann-based strategy assigns a weight of $\exp(r_i)$ to policy $i$, where $r_i$ is the total reward achieved by that policy.
 
 For further introduction, see [Levine 2017 (slides)](http://rll.berkeley.edu/deeprlcourse/f17docs/lecture_7_advanced_q_learning.pdf)
 
@@ -25,20 +26,11 @@ using OpenAIGym, ValueHistories, Plots
 If you want to perform plotting in the loop, the following function helps keeping the plot clean.
 ```{julia;echo=true}
 default(size=(1200,800)) # Set the default plot size
-function update_plot!(p; max_history = 10, attribute = :markercolor)
+function update_plot!(p; max_history = 10)
     num_series = length(p.series_list)
     if num_series > 1
         if num_series > max_history
             deleteat!(p.series_list,1:num_series-max_history)
-        end
-        for i = 1:min(max_history, num_series)-1
-            alpha = 1-2/max_history
-            c = p[i][attribute]
-            b = alpha*c.b + (1-alpha)*0.5
-            g = alpha*c.g + (1-alpha)*0.5
-            r = alpha*c.r + (1-alpha)*0.5
-            a = alpha*c.alpha
-            p[i][attribute] = RGBA(r,g,b,a)
         end
     end
 end
@@ -70,8 +62,6 @@ Reinforce.action(π::Policy, r, s, A) = π(s)
 num_params  = length(env.state)
 num_epochs  = 15
 num_samples = 25
-Σ           = 0.2eye(num_params) # Initial noise chol(covariance)
-μ           = zeros(num_params) # Initial policy mean
 const π     = Policy(zeros(num_params)) # π is now our policy object
 ```
 
@@ -97,7 +87,9 @@ end
 
 
 gr() # Set GR as plot backend, try pyplot() if GR is not working
-function CME(π, μ, Σ, num_epochs, num_samples; plotting=true)
+function CME(π, num_epochs, num_samples; plotting=true)
+    Σ = 0.2eye(num_params) # Initial noise chol(covariance)
+    μ = zeros(num_params)  # Initial policy mean
     plotting && (fig = plot(layout=2, show=true))
     reward_history = ValueHistories.History(Float64)
     for i = 1:num_epochs
@@ -117,8 +109,8 @@ function CME(π, μ, Σ, num_epochs, num_samples; plotting=true)
         if plotting
             plot!(reward_history, subplot=1, show=false)
             scatter!(θs, subplot=2, c=:red, title="Policy parameters", show=false, legend=false)
-            update_plot!(fig[1], max_history=1, attribute=:linecolor)
-            update_plot!(fig[2], max_history=num_samples, attribute=:linecolor)
+            update_plot!(fig[1], max_history=1)
+            update_plot!(fig[2], max_history=num_samples)
             gui(fig)
         end
     end
@@ -130,11 +122,15 @@ We now call our function, with the two different distribution-refit strategies:
 ```{julia;term=true}
 fit_new_distribution = fit_new_distribution_weighted
 srand(1);
-CME(π, μ, Σ, num_epochs, num_samples; plotting=true)
+CME(π, num_epochs, num_samples; plotting=false)
 ```
 
 ```{julia;term=true}
 fit_new_distribution = fit_new_distribution_rank
 srand(1);
-CME(π, μ, Σ, num_epochs, num_samples; plotting=true)
+CME(π, num_epochs, num_samples; plotting=false)
 ```
+
+If we run many experiments, we can plot the average reward history. The following plot depicts the average over 50 parallel runs.
+![window](cem.png)
+As we can see, the weight-based method finds a good solution faster, but fails to zoom in on a perfect policy like the rank-based method does after a while. Note, very little time was spent on tuning the hyper parameters of the two methods. The Boltzmann method can be tuned with a temperature parameter that controls the entropy of the distribution, this will allow for also this method to zoom in on a good policy.
