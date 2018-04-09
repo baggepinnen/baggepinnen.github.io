@@ -5,7 +5,7 @@ const g  = 9.82
 const l1 = 0.1
 const l2 = 0.5
 const h  = 0.05
-function fsys(xd,x,u)
+function fsys(xd, x, u = argmax_a(Q,x))
     xd[1] = x[2]
     xd[2] = -g/l1 * sin(x[1]) + u/l1 * cos(x[1])
     xd[3] = x[4]
@@ -14,8 +14,6 @@ function fsys(xd,x,u)
     xd[6] = u
     xd
 end
-
-fsys(xd,x) = fsys(xd,x,argmax_a(Q,x))
 
 function simulate()
     N = 100
@@ -42,7 +40,7 @@ end
 eulerstep(x,u) = x .+ h.*fsys(similar(x),x,u)
 const dists = ProductDistribution(Uniform(0,2π),Uniform(-5,5),Uniform(0,2π),Uniform(-5,5),Uniform(-1,1),Uniform(-3,3))
 
-function sample(s)
+function sample!(s)
     rand!(dists,s)
 end
 
@@ -59,7 +57,7 @@ struct Qfun
 end
 
 (Q::Qfun)(s) = Q.bfe(s)⋅Q.θ # This row makes our type Qfun callable
-(Q::Qfun)(s,a) = Q.bfe(eulerstep(s,a))⋅Q.θ # This row makes our type Qfun callable
+(Q::Qfun)(s,a) = Q.bfe(eulerstep(s,a))⋅Q.θ # Calculate maxₐ Q(s⁺,a)
 
 """This function makes for a nice syntax of updating the Q-function"""
 function Base.setindex!(Q::Qfun, q, s)
@@ -68,7 +66,7 @@ end
 
 const Q = Qfun(zeros(size(bfe.μ,2)), bfe) # Q is now our Q-function approximator
 
-num_episodes     = 10000
+iters            = 10000
 α                = 0.5   # Initial learning rate
 const decay_rate = 0.995 # decay rate for learning rate and ϵ
 const γ          = 0.99  # Discounting factor
@@ -85,22 +83,26 @@ end
 gr() # Enable the pyplot backend, try gr insted if pyplot is slow
 # gr()
 
-function VIlearning(num_episodes, α; plotting=true)
+"""
+VIlearning(iters, α; plotting=true)
+Run `iters` iterations of value iteration with stepsize `α`. Instead of integrating over the dynamics, this function samples states and uses the policy a = argmaxₐ(V(s⁺))
+"""
+function VIlearning(iters, α; plotting=true)
     # plotting && (fig = plot(layout=2, show=true))
-    reward_history = ValueHistories.History(Float64)
-    s = zeros(6)
-    @progress for ep = 1:num_episodes
-        sample(s)
+    temporal_diffs = ValueHistories.History(Float64)
+    s = zeros(6) # Preallocated container to store samples
+    @progress for iter = 1:iters
+        sample!(s)
         r = reward(s)
-        δ = r + γ*max_a(Q, s) - Q(s)
+        δ = r + γ*max_a(Q, s) - Q(s) # Temporal difference (TD) error
         Q[s] = α*δ # Update the Q-function approximator using Q-learning
-        push!(reward_history, ep, δ)
-        if plotting && ep % 10 == 0
-            plot(reward_history, layout=2, subplot=1, reuse = true, show=false)
+        push!(temporal_diffs, iter, δ)
+        if plotting && iter % 10 == 0
+            plot(temporal_diffs, layout=2, subplot=1, reuse = true, show=false)
             scatter!(Q.θ, subplot=2, reuse=true)
             gui()
         end
-        if plotting && (ep-5) % 30 == 0
+        if plotting && (iter-5) % 30 == 0
             x,a = simulate()
             @show R = sum(reward,x)
             plot(hcat(x...)', layout=7)
@@ -108,7 +110,7 @@ function VIlearning(num_episodes, α; plotting=true)
             gui()
         end
     end
-    reward_history
+    temporal_diffs
 end
 
-@time VIlearning(num_episodes, α, plotting = true)
+@time VIlearning(iters, α, plotting = true)
