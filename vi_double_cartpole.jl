@@ -1,22 +1,6 @@
 using BasisFunctionExpansions, ValueHistories, Plots, OrdinaryDiffEq, StaticArrays, BayesianTools.ProductDistributions, Optim
 default(size=(1200,800)) # Set the default plot size
-function update_plot!(p; max_history = 10, attribute = :markercolor)
-    num_series = length(p.series_list)
-    if num_series > 1
-        if num_series > max_history
-            deleteat!(p.series_list,1:num_series-max_history)
-        end
-        for i = 1:min(max_history, num_series)-1
-            alpha = 1-2/max_history
-            c = p[i][attribute]
-            b = alpha*c.b + (1-alpha)*0.5
-            g = alpha*c.g + (1-alpha)*0.5
-            r = alpha*c.r + (1-alpha)*0.5
-            a = alpha*c.alpha
-            p[i][attribute] = RGBA(r,g,b,a)
-        end
-    end
-end
+
 const g  = 9.82
 const l1 = 0.1
 const l2 = 0.5
