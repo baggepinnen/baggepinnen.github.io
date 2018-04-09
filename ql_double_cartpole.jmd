@@ -1,0 +1,213 @@
+# Reinforcement learning algorithms
+
+## Q-learning with ϵ-greedy
+This tutorial is available as an [iJulia notebook](https://github.com/baggepinnen/baggepinnen.github.io/blob/master/ql.ipynb)
+
+We start out by importing some packages. If it's your first time, you might have to install some packages using the commands in the initial comment.
+OpenAI gym is installed with instructions available at https://gym.openai.com/docs/
+```julia
+# Pkg.clone("https://github.com/tbreloff/MetaPkg.jl")
+# using MetaPkg
+# meta_add("MetaRL")
+# Pkg.add("Plots")
+# Pkg.add("BasisFunctionExpansions")
+# Pkg.add("ValueHistories")
+
+using BasisFunctionExpansions, ValueHistories, Plots, OrdinaryDiffEq, StaticArrays
+```
+
+If you want to perform plotting in the loop, the following function helps keeping the plot clean.
+```{julia;echo=true}
+default(size=(1200,800)) # Set the default plot size
+function update_plot!(p; max_history = 10, attribute = :markercolor)
+    num_series = length(p.series_list)
+    if num_series > 1
+        if num_series > max_history
+            deleteat!(p.series_list,1:num_series-max_history)
+        end
+        for i = 1:min(max_history, num_series)-1
+            alpha = 1-2/max_history
+            c = p[i][attribute]
+            b = alpha*c.b + (1-alpha)*0.5
+            g = alpha*c.g + (1-alpha)*0.5
+            r = alpha*c.r + (1-alpha)*0.5
+            a = alpha*c.alpha
+            p[i][attribute] = RGBA(r,g,b,a)
+        end
+    end
+end
+```
+
+Next, we define our simulator
+```julia
+const g  = 9.82
+const l1 = 0.1
+const l2 = 0.5
+const h  = 0.05
+function fsys(xd,x,p,t,u)
+    xd[1] = x[2]
+    xd[2] = -g/l1 * sin(x[1]) + u/l1 * cos(x[1])
+    xd[3] = x[4]
+    xd[4] = -g/l2 * sin(x[3]) + u/l2 * cos(x[3])
+    xd[5] = x[6]
+    xd[6] = u
+end
+
+function simulate(pol::T) where T
+    N = 20
+    x0    = Float64[π,0,π,0,0,0] + 0.01randn(6)
+    tspan = (0.,5.)
+    # f     = (xd,x,p,t) -> fsys(xd,x,p,t,pol(x))
+    # prob  = ODEProblem(f, x0, tspan)
+    # sol   = solve(prob, Tsit5(), reltol=1e-7,abstol=1e-7)
+    # x     = sol(tspan[1]:h:tspan[2])
+    x = Vector{Vector{Float64}}(N+1)
+    x[1] = x0
+    a = Vector{Float64}(N)
+    xd = similar(x0)
+    for i = 1:N
+        ai = pol(x[i])
+        fsys(xd,x[i],0,0,ai)
+        a[i] = ai
+        x[i+1] = x[i] + h*xd
+        x[i+1][1] = mod(x[i+1][1],2π)
+        x[i+1][3] = mod(x[i+1][3],2π)
+        x[i+1][5] = clamp.(x[i+1][5], -1, 1)
+        if abs(x[i+1][5]) == 1
+            x[i+1][6] *= -1
+        end
+    end
+    x,a
+end
+
+function reward(s)
+    r = - 0.1s[2]^2 - 0.1s[4]^2 - s[5]^2 - 0.1s[6]^2 - 10*(abs(s[5]) > 0.9) + 50
+    r -= sin((s[1]-pi)/2)^2
+    r -= sin((s[3]-pi)/2)^2
+end
+```
+
+We also define a $Q$-function approximator that is a linear combination of radial basis functions. For this we make use of the package [`BasisFunctionExpansions.jl`](https://github.com/baggepinnen/BasisFunctionExpansions.jl). We use 4 basis functions along each dimension except for the action dimension, which is discrete with two values only.
+```{julia}
+bfe = MultiUniformRBFE([linspace(-π/3,π/3) linspace(-5,5) linspace(-π/3,π/3) linspace(-5,5) linspace(-1,1) linspace(-3,3) linspace(-5,5)], [4,4,4,4,4,4,5])
+
+struct Qfun
+    θ::Vector{Float64}
+    bfe::MultiUniformRBFE
+end
+
+(Q::Qfun)(s,a) = Q.bfe([s;a])⋅Q.θ # This row makes our type Qfun callable
+
+"""This function makes for a nice syntax of updating the Q-function"""
+function Base.setindex!(Q::Qfun, q, s, a)
+    Q.θ .+= Q.bfe([s;a])* q
+end
+
+const Q = Qfun(zeros(size(bfe.μ,2)), bfe) # Q is now our Q-function approximator
+
+```
+We move on by defining some parameters
+```{julia}
+num_episodes     = 1000
+α                = 2.    # Initial learning rate
+const ϵ          = 0.99   # Initial chance of choosing random action
+const decay_rate = 0.995 # decay rate for learning rate and ϵ
+const γ          = 0.99  # Discounting factor
+```
+
+The next step is to define a `Reinforce.jl` policy type
+```{julia}
+mutable struct ϵGreedyPolicy
+    ϵ::Float64
+    decay_rate::Float64
+end
+
+"""Calling this function decays the ϵ"""
+function decay!(policy::ϵGreedyPolicy)
+    policy.ϵ *= policy.decay_rate
+end
+
+"""This is our ϵ-greedy action function"""
+function pol(policy::ϵGreedyPolicy, s)
+    rand() < policy.ϵ ? rand(-5:0.1:5) : argmax(Q, s)
+end
+
+function argmax(Q,s)
+    actions = [-5,-3,-1,0,1,3,5]
+    q = [Q(s,a) for a in actions]
+    qm, i = findmax(q)
+    actions[i]
+end
+
+"""max(Q(s,a)) over a"""
+function max_a(Q, s)
+    maximum(Q(s,a) for a in linspace(-5,5,15))
+end
+
+```
+We have now arrived at the main algorithm. We wrap it in a function for the Julia JIT complier to have it run faster.
+```{julia}
+gr() # Enable the pyplot backend, try gr insted if pyplot is slow
+# gr()
+
+const policy = ϵGreedyPolicy(ϵ, decay_rate)
+function Qlearning(policy, num_episodes, α; plotting=true)
+    # plotting && (fig = plot(layout=2, show=true))
+    reward_history = ValueHistories.History(Float64)
+    @progress for ep = 1:num_episodes
+        s,a = simulate(pol)
+        α *= decay_rate # Decay the learning rate
+        decay!(policy) # Decay greedyness
+        total_reward = 0.
+        @progress for i in eachindex(a) # An episode object is iterable
+            r = reward(s[i])
+            Q[s[i],a[i]] = α*(r + γ*max_a(Q, s[i+1]) - Q(s[i],a[i])) # Update the Q-function approximator using Q-learning
+            total_reward += r
+        end
+        push!(reward_history, ep, total_reward)
+        ep % 2 == 0 && println("Episode: $ep, reward: $(total_reward)")
+        if plotting && ep % 5 == 0
+            plot(reward_history, layout=9, subplot=1, reuse = true, show=false)
+            plot!(hcat(s...)', subplot=2:7, reuse=true, show=false)
+            scatter!(Q.θ, subplot=8, c=:red, title="Policy parameters", show=false)
+            plot!(a, subplot=9)
+            gui()
+        end
+    end
+    plot(reward_history, title="Rewards", xlabel="Episode", show=true)
+end
+#```
+#We now call our function.
+#```{julia;term=true}
+pol(s) = pol(policy, s)
+@time Qlearning(policy, num_episodes, α, plotting = true)
+```
+
+
+## Boltzmann exploration
+The ϵ-greedy works well and learns to achieve maximum reward after a few hundred iterations.
+A different policy, that works well for discrete action spaces is Boltzmann exploration.
+Consider the policy $π(a|s) = \exp(Q(s,a))/\sum_a \exp(Q(s,a))$, it will sample an action based on how good Q-value it has. This ensures that all actions that have some possibility to be good are sampled, but actions known to be very good are sampled more often.
+```julia
+struct BoltzmannPolicy end
+
+decay!(policy) = nothing
+
+"""This is our Boltzmann exploration action function"""
+function  pol(policy::BoltzmannPolicy, s)
+    actions = linspace(-5,5,15)
+    eq = [exp(Q(s,a)) for a in actions]
+    prob = cumsum(eq./sum(eq))
+    r = rand()
+    i = findfirst(p->p>r,prob)
+    actions[i]
+end
+
+const policy2 = BoltzmannPolicy()
+pol(s) = pol(policy2, s)
+Q.θ  .*= 0 # Reset Q-function
+@time Qlearning(policy, num_episodes, 10000, plotting = true)
+```
+```{julia;term=true}
+```
+The Boltzmann exploration typically works better than ϵ-greedy in this environment.
