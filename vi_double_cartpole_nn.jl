@@ -50,13 +50,11 @@ function sample!(s)
 end
 
 function reward(s)
-    r = - 0.01s[1]^2 - 0.01s[2]^2 - 10*(abs(s[1]) > 0.9)
+    r = - 0.1s[1]^2 - 0.01s[2]^2 - 10*(abs(s[1]) > 0.9)
     r -= 10sin((s[3]-pi)/2)^2 +  0.1s[4]^2
     # r -= 10sin((s[5]-pi)/2)^2 +  0.1s[6]^2
 end
-const V = Chain(Dense(nstates,20,Flux.σ), Dense(20,1))
 
-(V::typeof(V))(s,a) = V(eulerstep(s,a)) # Calculate maxₐ V(s⁺,a)
 
 iters            = 10_000
 α                = 0.1   # Initial learning rate
@@ -89,7 +87,9 @@ function load(filename)
     return θ
 end
 
-opt = ADAM(params(V), 1e-2)
+const V = Chain(Dense(nstates,20,Flux.σ), Dense(20,1))
+opt = Flux.SGD(params(V), 1e-2)
+(V::typeof(V))(s,a) = V(eulerstep(s,a)) # Calculate maxₐ V(s⁺,a)
 
 """
 VIlearning(iters, α; plotting=true)
@@ -107,7 +107,7 @@ function VIlearning(V,opt, iters; plotting=true)
         y = r + γ*max_a(Vc, s)
         tl = Flux.train!(loss, [(s,y)], opt)
         iter % 100 == 0 && push!(losses, iter, tl)
-        if plotting && iter % 10000 == 0
+        if plotting && iter % 5000 == 0
             Vc = deepcopy(V)
             save("valueparams",V)
             plot(losses, reuse = true)
@@ -120,7 +120,7 @@ end
 trace = VIlearning(V,opt, 200_000, plotting = true)
 
 
-x,a = simulate(200)
+x,a = simulate(100)
 @show R = sum(reward,x)
 X = hcat(x...)'
 ControlSystems.unwrap!(@view(X[:,[3]]))
