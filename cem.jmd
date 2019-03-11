@@ -11,16 +11,16 @@ For further introduction, see [Levine 2017 (slides)](http://rll.berkeley.edu/dee
 This tutorial is available as an [iJulia notebook](https://github.com/baggepinnen/baggepinnen.github.io/blob/master/cem.ipynb)
 
 We start out by importing some packages. If it's your first time, you might have to install some packages using the commands in the initial comment.
-OpenAI gym is installed with instructions available at https://gym.openai.com/docs/
+OpenAI gym is installed with instructions available at https://github.com/JuliaML/OpenAIGym.jl
 ```julia
-# Pkg.clone("https://github.com/tbreloff/MetaPkg.jl")
-# using MetaPkg
-# meta_add("MetaRL")
+# using Pkg
 # Pkg.add("Plots")
 # Pkg.add("BasisFunctionExpansions")
 # Pkg.add("ValueHistories")
+# Pkg.add("StatsBase"); Pkg.add("Distributions")
+# Pkg.add("https://github.com/JuliaML/OpenAIGym.jl")
 
-using OpenAIGym, ValueHistories, Plots
+using OpenAIGym, ValueHistories, Plots, LinearAlgebra, Random, Statistics, StatsBase, Distributions
 ```
 
 If you want to perform plotting in the loop, the following function helps keeping the plot clean.
@@ -41,7 +41,7 @@ Next, we define an environment from the OpenAIGym framework, we'll use the [cart
 env = GymEnv("CartPole-v0")
 
 function collect_reward(ep)
-    r = Vector{Float64}(0)
+    r = Vector{Float64}()
     for (ss,aa,rr,ss1) in ep
         push!(r,rr)
     end
@@ -69,31 +69,27 @@ We have now arrived at the main algorithm. We wrap it in a function for the Juli
 ```{julia}
 function fit_new_distribution_weighted(θs, w)
     weights = ProbabilityWeights(exp.(w))
-    μ       = mean(θs, weights, 2)
-    Σ       = cov(θs, weights, 2, corrected=true)
-    Σ       = chol(Symmetric(Σ + 1e-5I))'
-    μ, Σ
+    μ       = mean(θs, weights, dims=2)[:]
+    Σ       = cov(θs, weights, 2, corrected=true) + 1e-5I
+    MvNormal(μ, Σ)
 end
 
 function fit_new_distribution_rank(θs, w)
     fraction = 2
     p        = sortperm(w)
     indicies = p[end-end÷fraction:end]
-    μ        = mean(θs[:,indicies], 2)
-    Σ        = cov(θs[:,indicies], 2)
-    Σ        = chol(Symmetric(Σ))'
-    μ, Σ
+    μ        = mean(θs[:,indicies], dims=2)[:]
+    Σ        = cov(θs[:,indicies], dims=2) + 1e-5I
+    MvNormal(μ, Σ)
 end
-
 
 gr() # Set GR as plot backend, try pyplot() if GR is not working
 function CME(π, num_epochs, num_samples; plotting=true)
-    Σ = 0.2eye(num_params) # Initial noise chol(covariance)
-    μ = zeros(num_params)  # Initial policy mean
+    dist = MvNormal(zeros(num_params), 0.2Matrix{Float64}(I,num_params,num_params)) # Initial noise
     plotting && (fig = plot(layout=2, show=true))
     reward_history = ValueHistories.History(Float64)
     for i = 1:num_epochs
-        θs = Σ*randn(num_params, num_samples) .+ μ # Sample new policies
+        θs = rand(dist, num_samples) # Sample new policies
         weights = zeros(num_samples)
         for n = 1:num_samples # Collect N trajectories for Expectation estimation
             π.θ       .= θs[:,n] # Set policy parameters
@@ -102,7 +98,7 @@ function CME(π, num_epochs, num_samples; plotting=true)
             weights[n] = ep.total_reward
             push!(reward_history, (i-1)*num_samples+n, ep.total_reward)
         end
-        μ, Σ = fit_new_distribution(θs, weights)
+        dist = fit_new_distribution(θs, weights)
 
         # Printing and plotting
         println("Epoch: $i, reward: $(reward_history.values[end])")
@@ -121,13 +117,13 @@ end
 We now call our function, with the two different distribution-refit strategies:
 ```{julia;term=true}
 fit_new_distribution = fit_new_distribution_weighted
-srand(1);
+Random.seed!(0);
 CME(π, num_epochs, num_samples; plotting=false)
 ```
 
 ```{julia;term=true}
 fit_new_distribution = fit_new_distribution_rank
-srand(1);
+Random.seed!(0);
 CME(π, num_epochs, num_samples; plotting=false)
 ```
 
