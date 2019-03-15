@@ -1,0 +1,165 @@
+# Reinforcement learning algorithms
+
+## Q-learning with ϵ-greedy
+This tutorial is available as an [iJulia notebook](https://github.com/baggepinnen/baggepinnen.github.io/blob/master/ql.ipynb)
+
+We start out by importing some packages. If it's your first time, you might have to install some packages using the commands in the initial comment.
+OpenAI gym is installed with instructions available at https://github.com/JuliaML/OpenAIGym.jl
+```julia
+# using Pkg
+# Pkg.add("Plots")
+# Pkg.add("BasisFunctionExpansions")
+# Pkg.add("ValueHistories")
+# Pkg.add("https://github.com/JuliaML/OpenAIGym.jl")
+
+using OpenAIGym, ValueHistories, Plots, Random, LinearAlgebra
+```
+
+If you want to perform plotting in the loop, the following function helps keeping the plot clean.
+```{julia;echo=true}
+default(size=(1200,800)) # Set the default plot size
+function update_plot!(p; max_history = 10, attribute = :markercolor)
+    num_series = length(p.series_list)
+    if num_series > 1
+        if num_series > max_history
+            deleteat!(p.series_list,1:num_series-max_history)
+        end
+        for i = 1:min(max_history, num_series)-1
+            alpha = 1-2/max_history
+            c = p[i][attribute]
+            b = alpha*c.b + (1-alpha)*0.5
+            g = alpha*c.g + (1-alpha)*0.5
+            r = alpha*c.r + (1-alpha)*0.5
+            a = alpha*c.alpha
+            p[i][attribute] = RGBA(r,g,b,a)
+        end
+    end
+end
+```
+
+Next, we define an environment from the OpenAIGym framework, we'll use the [cartpole environment](https://gym.openai.com/envs/CartPole-v0/)
+```julia{julia;echo=true}
+env = GymEnv("CartPole-v0");
+```
+
+We also define a $Q$-function approximator that is a linear combination of radial basis functions. For this we make use of the package [`BasisFunctionExpansions.jl`](https://github.com/baggepinnen/BasisFunctionExpansions.jl). We use 4 basis functions along each dimension except for the action dimension, which is discrete with two values only.
+```{julia; echo=true}
+
+nx,nu = 4,1
+domain = [(0,1), (-0.3,0.3) ,(-2,2) ,(-0.2,0.2) ,(-3.2,3.2)]
+model = QuadraticModel(nx+nu; actiondims=1:1)
+model.updater.P .*= 100
+splitter = QuadformSplitter(2:5)
+grid = Grid(domain, model, splitter)
+struct Qfun
+    grid
+    splitter
+end
+
+(Q::Qfun)(s,a) = predict(Q.grid, s, a)
+
+"""This function makes for a nice syntax of updating the Q-function"""
+function Base.setindex!(Q::Qfun, q, s, a)
+    update!(Q.grid, s, a, q)
+end
+
+const Q = Qfun(grid, splitter); # Q is now our Q-function approximator
+
+```
+We move on by defining some parameters
+```{julia; echo=true}
+num_episodes     = 1000
+α                = 1.    # Initial learning rate
+const ϵ          = 0.5   # Initial chance of choosing random action
+const decay_rate = 0.997 # decay rate for learning rate and ϵ
+const γ          = 0.99; # Discounting factor
+```
+
+The next step is to define a `Reinforce.jl` policy type
+```{julia; echo=true}
+mutable struct ϵGreedyPolicy <: AbstractPolicy
+    ϵ::Float64
+    decay_rate::Float64
+end
+
+"""Calling this function decays the ϵ"""
+function decay!(policy::ϵGreedyPolicy)
+    policy.ϵ *= policy.decay_rate
+end
+
+"""This is our ϵ-greedy action function"""
+function Reinforce.action(policy::ϵGreedyPolicy, r, s, A)
+    rand() < policy.ϵ ? rand(0:1) : Q(s,1) > Q(s,0) ? 1 : 0
+end
+
+"""max(Q(s,a)) over a"""
+function max_a(Q, s)
+    max(Q(s,1), Q(s,0))
+end
+
+policy = ϵGreedyPolicy(ϵ, decay_rate);
+```
+We have now arrived at the main algorithm. We wrap it in a function for the Julia JIT complier to have it run faster.
+```{julia; echo=true}
+function Qlearning(policy, num_episodes, α; plotting=true)
+    plotting && (fig = plot(layout=2, show=true))
+    reward_history = ValueHistories.History(Float64)
+    for i = 1:num_episodes
+        ep = Episode(env, policy)
+        # α *= decay_rate # Decay the learning rate
+        decay!(policy) # Decay greedyness
+        if i % 100 == 0
+            splitter(grid)
+            @show countnodes(grid)
+        end
+        for (s,a,r,s1) in ep # An episode object is iterable
+            # i % 100 == 0 && OpenAIGym.render(env) # Uncomment this line to have the episode rendered
+            Q[s,a] = α*(r + γ*max_a(Q, s1) - Q(s,a)) # Update the Q-function approximator using Q-learning
+        end
+        push!(reward_history, i, ep.total_reward)
+        i % 20 == 0 && println("Episode: $i, reward: $(ep.total_reward)")
+        if plotting && i % 20 == 0
+            plot!(reward_history, subplot=1)
+            scatter!(Q.θ, subplot=2, c=:red, title="Policy parameters")
+            update_plot!(fig[1], max_history=1, attribute=:linecolor)
+            update_plot!(fig[2], max_history=5, attribute=:linecolor)
+            gui(fig)
+        end
+    end
+    plot(reward_history, title="Rewards", xlabel="Episode", show=true)
+end;
+```
+We now call our function.
+```{julia;term=true}
+Random.seed!(0);
+@time Qlearning(policy, num_episodes, α, plotting = false)
+```
+
+
+## Boltzmann exploration
+The ϵ-greedy works well and learns to achieve maximum reward after a few hundred iterations.
+A different policy, that works well for discrete action spaces is Boltzmann exploration.
+Consider the policy $π(a|s) = \exp(Q(s,a))/\sum_a \exp(Q(s,a))$, it will sample an action based on how good Q-value it has. This ensures that all actions that have some possibility to be good are sampled, but actions known to be very good are sampled more often.
+```{julia; echo=true}
+struct BoltzmannPolicy <: AbstractPolicy end
+
+decay!(policy) = nothing
+
+"""This is our Boltzmann exploration action function"""
+function Reinforce.action(policy::BoltzmannPolicy, r, s, A)
+    Q1,Q0 = Q(s,1), Q(s,0)
+    prob1 = exp(Q1)/(exp(Q1)+exp(Q0))
+    rand() < prob1 ? 1 : 0
+end
+
+policy = BoltzmannPolicy()
+model = QuadraticModel(nx+nu; actiondims=1:1)
+model.updater.P .*= 100
+splitter = QuadformSplitter(2:5)
+grid = Grid(domain, model, splitter)
+```
+```{julia;term=true}
+Random.seed!(0);
+@time Qlearning(policy, num_episodes, α, plotting = false)
+```
+The Boltzmann exploration typically works better than ϵ-greedy in this environment.
