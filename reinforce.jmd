@@ -5,16 +5,15 @@ For an introduction to policy gradient methods, see [Levine 2017 (slides)](http:
 This tutorial is available as an [iJulia notebook](https://github.com/baggepinnen/baggepinnen.github.io/blob/master/reinforce.ipynb)
 
 We start out by importing some packages. If it's your first time, you might have to install some packages using the commands in the initial comment.
-OpenAI gym is installed with instructions available at https://gym.openai.com/docs/
+OpenAI gym is installed with instructions available at https://github.com/JuliaML/OpenAIGym.jl
 ```julia
-# Pkg.clone("https://github.com/tbreloff/MetaPkg.jl")
-# using MetaPkg
-# meta_add("MetaRL")
+# using Pkg
 # Pkg.add("Plots")
 # Pkg.add("BasisFunctionExpansions")
 # Pkg.add("ValueHistories")
+# Pkg.add("https://github.com/JuliaML/OpenAIGym.jl")
 
-using OpenAIGym, BasisFunctionExpansions, ValueHistories, Plots
+using OpenAIGym, BasisFunctionExpansions, ValueHistories, Plots, Random, LinearAlgebra
 ```
 
 If you want to perform plotting in the loop, the following function helps keeping the plot clean.
@@ -35,7 +34,7 @@ Next, we define an environment from the OpenAIGym framework, we'll use the [cart
 env = GymEnv("CartPole-v0")
 
 function collect_episode(ep)
-    s,a,r,s1 = Vector{Vector{Float64}}(0),Vector{Float64}(0),Vector{Float64}(0),Vector{Vector{Float64}}(0)
+    s,a,r,s1 = Vector{Vector{Float64}}(),Vector{Float64}(),Vector{Float64}(),Vector{Vector{Float64}}()
     for (ss,aa,rr,ss1) in ep
         push!(s,ss)
         push!(a,aa)
@@ -48,7 +47,7 @@ end
 
 We also define a policy object that is a linear combination of radial basis functions. For this we make use of the package [`BasisFunctionExpansions.jl`](https://github.com/baggepinnen/BasisFunctionExpansions.jl). We use 4 basis functions along each dimension. Along with the policy, we define a function to calculate $\nabla_\theta \log \pi_\theta(a|s)$
 ```julia
-bfe = MultiUniformRBFE([linspace(-0.3,0.3) linspace(-2,2) linspace(-0.2,0.2) linspace(-3.2,3.2)], [4,4,4,4])
+bfe = MultiUniformRBFE([LinRange(-0.3,0.3,3) LinRange(-2,2,3) LinRange(-0.2,0.2,3) LinRange(-3.2,3.2,3)], [4,4,4,4])
 
 mutable struct Policy <: AbstractPolicy
     θ::Vector{Float64}
@@ -72,7 +71,7 @@ N                = 5
 const decay_rate = 0.99  # decay rate for learning rate and noise
 const γ          = 0.99  # Discounting factor
 σ                = 0.1   # Policy noise
-const π = Policy(0.001randn(size(bfe.μ,2)), bfe, σ) # π is now our policy object
+const π = Policy(0.001randn(size(bfe.μ,2)), bfe, σ); # π is now our policy object
 ```
 
 We have now arrived at the main algorithm. We wrap it in a function for the Julia JIT complier to have it run faster.
@@ -86,7 +85,7 @@ function REINFORCE(π, num_epochs, N, α; plotting=true)
         local ep
         α   *= decay_rate # Decay the learning rate
         π.σ *= decay_rate # Decay the exploration noise
-        ∇θ   = zeros(π.θ) # Gradient accumulator
+        ∇θ   = zeros(size(π.θ)) # Gradient accumulator
         for n = 1:N # Collect N trajectories for Expectation estimation
             ep       = Episode(env, π)
             s,a,r,s1 = collect_episode(ep)
@@ -115,6 +114,6 @@ end
 
 We now call our function.
 ```{julia;term=true}
-srand(1);
+Random.seed!(1);
 REINFORCE(π, num_epochs, N, α; plotting=false)
 ```
