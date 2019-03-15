@@ -22,11 +22,11 @@ function fsys(xd, x, u = argmax_a(V,x))
 end
 
 function simulate(N = 100)
-    x0    = 0.01randn(nstates)
-    x = Vector{Vector{Float64}}(N+1)
+    x0   = 0.01randn(nstates) # + [0,0,pi,0]
+    x    = Vector{Vector{Float64}}(N+1)
     x[1] = x0
-    a = Vector{Float64}(N)
-    xd = similar(x0)
+    a    = Vector{Float64}(N)
+    xd   = similar(x0)
     @progress for i = 1:N
         ai = argmax_a(V,x[i])
         fsys(xd,x[i],ai)
@@ -49,10 +49,11 @@ function sample!(s)
     rand!(dists,s)
 end
 
-function reward(s)
-    r = - 0.1s[1]^2 - 0.01s[2]^2 - 10*(abs(s[1]) > 0.9)
+function reward(s,a)
+    r = - s[1]^2 - s[2]^2 - 10*(abs(s[1]) > 0.9)
     r -= 10sin((s[3]-pi)/2)^2 +  0.1s[4]^2
     # r -= 10sin((s[5]-pi)/2)^2 +  0.1s[6]^2
+    r -= 0.5a^2
 end
 
 
@@ -61,14 +62,14 @@ iters            = 10_000
 const decay_rate = 0.995 # decay rate for learning rate and ϵ
 const γ          = 0.99  # Discounting factor
 
-"""max(V(s,a)) over a"""
-function max_a(V, s)
-    optimize(a->-data(V(s,a))[], -5,5).minimum
+function opt_a(V, s)
+    optimize(a->-data(V(s,a))[], -5,5)
 end
 
-function argmax_a(V, s)
-    optimize(a->-data(V(s,a))[], -5,5).minimizer[]
-end
+"""max(V(s,a)) over a"""
+max_a(V, s) = opt_a(V, s).minimum
+argmax_a(V, s) = opt_a(V, s).minimizer[]
+
 
 gr() # Enable the pyplot backend, try gr insted if pyplot is slow
 # gr()
@@ -87,8 +88,8 @@ function load(filename)
     return θ
 end
 
-const V = Chain(Dense(nstates,20,Flux.σ), Dense(20,1))
-opt = Flux.SGD(params(V), 1e-2)
+const V = Chain(Dense(nstates,20,Flux.σ), Dense(20,10,Flux.σ), Dense(10,1))
+opt = Flux.ADAM(params(V))
 (V::typeof(V))(s,a) = V(eulerstep(s,a)) # Calculate maxₐ V(s⁺,a)
 
 """
@@ -103,25 +104,36 @@ function VIlearning(V,opt, iters; plotting=true)
     s = zeros(nstates) # Preallocated container to store samples
     @progress for iter = 1:iters
         sample!(s)
-        r = reward(s)
-        y = r + γ*max_a(Vc, s)
+        res = opt_a(Vc,s)
+        a = res.minimizer[]
+        r = reward(s,a)
+        y = r + γ*res.minimum
         tl = Flux.train!(loss, [(s,y)], opt)
-        iter % 100 == 0 && push!(losses, iter, tl)
-        if plotting && iter % 5000 == 0
+        Flux.train!(loss, [([0,0,pi,0],0)], opt)
+        if iter % 100 == 0
+            push!(losses, iter, tl)
+        end
+        if iter % 10000 == 0
             Vc = deepcopy(V)
             save("valueparams",V)
-            plot(losses, reuse = true)
+        end
+        if iter % 1000 == 0
+            plot(losses, reuse = true, layout=5)
+            plot!(linspace(-1,1), s->data(V([s,0,pi,0]))[], subplot=2, xlabel="Pos (at top)")
+            plot!(linspace(-3,3), s->data(V([0,s,pi,0]))[], subplot=3, xlabel="Vel (at top)")
+            plot!(linspace(0,2pi), s->data(V([0,0,s,0]))[], subplot=4, xlabel="Angle")
+            plot!(linspace(-5,5), a->data(V([0,0,pi,0],a))[], subplot=5, xlabel="Action")
             gui()
         end
     end
     losses
 end
 
-trace = VIlearning(V,opt, 200_000, plotting = true)
+trace = VIlearning(V,opt, 1_000_000, plotting = true)
 
 
-x,a = simulate(100)
-@show R = sum(reward,x)
+x,a = simulate(200)
+@show R = sum(x->reward(x...),zip(x,a))
 X = hcat(x...)'
 ControlSystems.unwrap!(@view(X[:,[3]]))
 scatter(X, layout=(4,2))
