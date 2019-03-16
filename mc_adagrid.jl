@@ -100,23 +100,26 @@ function MClearning(Q, policy, num_episodes; plotting=true, target_update_interv
 end
 λ, tui, P0 = 0.0001, 5, 10
 
-# ho = @hyperopt for i=50, sampler = BlueNoiseSampler(),
-#     λ   = exp10.(LinRange(-3,3,200)),
-#     # λ = 1 .- exp10.(LinRange(-4,-2,50)),
-#     # tui = round.(Int, exp10.(range(0, stop=2, length=200))),
-#     P0  = exp10.(range(-1, stop=3, length=200))
-# @benchmark begin
-m     = QuadraticModel(nx+nu; actiondims = 1:1, λ = λ, P0 = P0)
-gridm = Grid(domain, m, splitter, initial_split =0)
-Q     = Qfun(gridm, splitter); # Q is now our Q-function approximator
-ϵ     = 0.5 # Initial chance of choosing random action
-num_episodes = 400
-decay_rate   = 0.995 # decay rate for learning rate and ϵ
-policy       = ϵGreedyPolicy(ϵ, decay_rate, Q);
-rh = MClearning(Q, policy, num_episodes, plotting = true, target_update_interval=tui)
-mean(rh.values[end-10:end])
-# end
-# plot(ho)
+ho = @hyperopt for i=30, sampler = BlueNoiseSampler(),
+    α   = exp10.(range(-5, stop=-0.5, length=200))
+    # λ   = exp10.(LinRange(-3,3,200))
+    # λ = 1 .- exp10.(LinRange(-4,-2,50)),
+    # tui = round.(Int, exp10.(range(0, stop=2, length=200))),
+    # P0  = exp10.(range(-1, stop=3, length=200))
+    # @benchmark begin
+    updater = NewtonUpdater(α, 0.999)
+    m     = QuadraticModel(nx+nu; actiondims = 1:1, updater=updater)
+    # m     = QuadraticModel(nx+nu; actiondims = 1:1, λ = λ, P0 = P0)
+    gridm = Grid(domain, m, splitter, initial_split =0)
+    Q     = Qfun(gridm, splitter); # Q is now our Q-function approximator
+    ϵ     = 0.5 # Initial chance of choosing random action
+    num_episodes = 400
+    decay_rate   = 0.995 # decay rate for learning rate and ϵ
+    policy       = ϵGreedyPolicy(ϵ, decay_rate, Q);
+    rh = MClearning(Q, policy, num_episodes, plotting = false, target_update_interval=tui)
+    mean(rh.values[end-30:end])
+end
+plot(ho);gui()
 
 # julia> maximum(ho)
 # (Real[0.67, 0.999854, 28, 6.25055], 200.0)

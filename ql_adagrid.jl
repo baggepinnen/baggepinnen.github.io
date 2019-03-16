@@ -54,15 +54,13 @@ argmax_a(Q,s) = Q(s,1) > Q(s,0) ? 1 : 0
 
 env = GymEnv("CartPole-v0");
 
-function Qlearning(Q, policy, num_episodes, α; plotting=true, target_update_interval=100)
+function Qlearning(Q, policy, num_episodes; plotting=true, target_update_interval=100)
     γ            = 0.99; # Discounting factor
     Qt = deepcopy(Q)
     plotting && (fig = plot(layout=2, show=true))
     reward_history = ValueHistories.History(Float64)
-    m = zeros(4)
     for i = 1:num_episodes
         ep = Episode(env, policy)
-        # α *= decay_rate # Decay the learning rate
         decay!(policy) # Decay greedyness
         if i % target_update_interval == 0
             Qt = deepcopy(Q)
@@ -70,13 +68,13 @@ function Qlearning(Q, policy, num_episodes, α; plotting=true, target_update_int
             # @show countnodes(Q.grid)
         end
         for (s,a,r,s1) in ep # An episode object is iterable
-            Q[s,a] = α*(r + γ*max_a(Q, s1) - Q(s,a)) # Update Q using Q-learning
-            # Q[s,a] = α*(r + γ*Qt(s1,argmax_a(Q, s1)) - Qt(s,a)) # Update Q using double Q-learning
-            m = max.(m,abs.(s))
+            # Q[s,a] = r + γ*max_a(Q, s1) # Update Q using Q-learning
+            # TODO: if using newton updater, use inverse variance as preconditioner in calculating newton direction
+            Q[s,a] = r + γ*Qt(s1,argmax_a(Q, s1)) # Update Q using double Q-learning
         end
         push!(reward_history, i, ep.total_reward)
         i % 20 == 0 && println("Episode: $i, reward: $(ep.total_reward)")
-        if plotting && i % 40 == 0
+        if plotting && i % 50 == 0
             p1 = plot(reward_history, show=false)
             p2 = gridmat(Q.grid, show=false, axis=false)
             plot(p1,p2); gui()
@@ -85,46 +83,52 @@ function Qlearning(Q, policy, num_episodes, α; plotting=true, target_update_int
     plot(reward_history, title="Rewards", xlabel="Episode", show=true)
     reward_history
 end
-α, λ, tui, P0 = 0.67, 0.1, 5, 10
-
-ho = @hyperopt for i=50, sampler = BlueNoiseSampler(),
-    α   = LinRange(0.1,0.99,200),
-    λ   = exp10.(LinRange(-3,3,200)),
+λ, tui, P0 = 0.01, 5, 10
+tuir = round.(Int, exp10.(range(0, stop=2, length=200)))
+ho = @hyperopt for i=20, sampler = BlueNoiseSampler(),
+    α   = exp10.(range(-5, stop=-0.5, length=200)),
+    # λ   = exp10.(LinRange(-5,3,200)),
     # λ = 1 .- exp10.(LinRange(-4,-2,50)),
-    # tui = round.(Int, exp10.(range(0, stop=2, length=200))),
-    P0  = exp10.(range(-1, stop=3, length=200))
-    # @benchmark begin
-    m     = QuadraticModel(nx+nu; actiondims = 1:1, λ = λ, P0 = P0)
+    tui = tuir
+    # P0  = exp10.(range(-1, stop=3, length=200))
+    #     @benchmark begin
+    # updater = NewtonUpdater(α, 0.999)
+    updater = GradientUpdater(α, 0.999)
+    m     = QuadraticModel(nx+nu; actiondims = 1:1, updater=updater)
+    # m     = QuadraticModel(nx+nu; actiondims = 1:1, λ = λ, P0 = P0)
     gridm = Grid(domain, m, splitter, initial_split =0)
     Q     = Qfun(gridm, splitter); # Q is now our Q-function approximator
     ϵ     = 0.5 # Initial chance of choosing random action
-    num_episodes = 100
+    num_episodes = 400
     decay_rate   = 0.995 # decay rate for learning rate and ϵ
     policy       = ϵGreedyPolicy(ϵ, decay_rate, Q);
-    rh = Qlearning(Q, policy, num_episodes, α, plotting = false, target_update_interval=tui)
-    mean(rh.values[end-10:end])
+    rh = Qlearning(Q, policy, num_episodes, plotting = false, target_update_interval=tui)
+    mean(rh.values[end-100:end])
 end
 
-plot(ho)
-
+plot(ho);gui()
+##
+error()
 # julia> maximum(ho)
 # (Real[0.67, 0.999854, 28, 6.25055], 200.0)
 
-#
-# struct BoltzmannPolicy <: AbstractPolicy end
-#
-# decay!(policy::BoltzmannPolicy) = nothing
-#
-# """This is our Boltzmann exploration action function"""
-# function Reinforce.action(policy::BoltzmannPolicy, r, s, A)
-#     Q1,Q0 = Q(s,1), Q(s,0)
-#     prob1 = exp(Q1)/(exp(Q1)+exp(Q0))
-#     rand() < prob1 ? 1 : 0
-# end
-#
-# policy = BoltzmannPolicy()
-# m        = QuadraticModel(nx+nu; actiondims=1:1, λ=λ, P0=P0)
-# gridm        = Grid(domain, m, splitter, initial_split=0)
-# Q            = Qfun(gridm, splitter);
-#
-# @time Qlearning(Q,policy, num_episodes, α, plotting = false)
+##
+struct BoltzmannPolicy <: AbstractPolicy end
+
+decay!(policy::BoltzmannPolicy) = nothing
+
+"""This is our Boltzmann exploration action function"""
+function Reinforce.action(policy::BoltzmannPolicy, r, s, A)
+    Q1,Q0 = Q(s,1), Q(s,0)
+    prob1 = exp(Q1)/(exp(Q1)+exp(Q0))
+    rand() < prob1 ? 1 : 0
+end
+
+policy = BoltzmannPolicy()
+updater = NewtonUpdater(0.1, 0.999)
+m     = QuadraticModel(nx+nu; actiondims = 1:1, updater=updater)
+# m     = QuadraticModel(nx+nu; actiondims = 1:1, λ = λ, P0 = P0)
+gridm = Grid(domain, m, splitter, initial_split =0)
+Q     = Qfun(gridm, splitter); # Q is now our Q-function approximator
+
+@time Qlearning(Q,policy, num_episodes, α, plotting = true, target_update_interval=tui)
