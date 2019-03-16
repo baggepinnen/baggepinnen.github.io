@@ -1,14 +1,26 @@
 include("/local/home/fredrikb/.julia/dev/KalmanTree/src/tree_tools.jl")
 include("/local/home/fredrikb/.julia/dev/KalmanTree/src/domain_tools.jl")
 include("/local/home/fredrikb/.julia/dev/KalmanTree/src/models.jl")
+using OpenAIGym, ValueHistories, Plots, Random, LinearAlgebra, Hyperopt
+default(size=(1800,1000))
+
+function collect_episode(ep)
+    s,a,r,s1 = Vector{Vector{Float64}}(),Vector{Float64}(),Vector{Float64}(),Vector{Vector{Float64}}()
+    for (ss,aa,rr,ss1) in ep
+        push!(s,ss)
+        push!(a,aa)
+        push!(r,rr)
+        push!(s1,ss1)
+    end
+    s,a,r,s1
+end
+
 # using Pkg
 # Pkg.add("Plots")
 # Pkg.add("BasisFunctionExpansions")
 # Pkg.add("ValueHistories")
 # Pkg.add("https://github.com/JuliaML/OpenAIGym.jl")
 
-using OpenAIGym, ValueHistories, Plots, Random, LinearAlgebra, Hyperopt
-default(size=(1800,1000))
 
 
 nx,nu = 4,1
@@ -54,26 +66,27 @@ argmax_a(Q,s) = Q(s,1) > Q(s,0) ? 1 : 0
 
 env = GymEnv("CartPole-v0");
 
-function Qlearning(Q, policy, num_episodes, α; plotting=true, target_update_interval=100)
+function MClearning(Q, policy, num_episodes; plotting=true, target_update_interval=100)
     γ            = 0.99; # Discounting factor
-    Qt = deepcopy(Q)
     plotting && (fig = plot(layout=2, show=true))
     reward_history = ValueHistories.History(Float64)
-    m = zeros(4)
+
     for i = 1:num_episodes
         ep = Episode(env, policy)
         # α *= decay_rate # Decay the learning rate
         decay!(policy) # Decay greedyness
         if i % target_update_interval == 0
-            Qt = deepcopy(Q)
             # splitter(Q.grid)
             # @show countnodes(Q.grid)
         end
-        for (s,a,r,s1) in ep # An episode object is iterable
-            Q[s,a] = α*(r + γ*max_a(Q, s1) - Q(s,a)) # Update Q using Q-learning
-            # Q[s,a] = α*(r + γ*Qt(s1,argmax_a(Q, s1)) - Qt(s,a)) # Update Q using double Q-learning
-            m = max.(m,abs.(s))
+        s,a,r,s1 = collect_episode(ep)
+        sumr = 0.
+        for t = length(s):-1:1 # Iterate backwards for efficient ∑r calculation
+            sumr += r[t] # Sum of rewards
+            Q[s[t], a[t]] = sumr
         end
+
+
         push!(reward_history, i, ep.total_reward)
         i % 20 == 0 && println("Episode: $i, reward: $(ep.total_reward)")
         if plotting && i % 40 == 0
@@ -85,27 +98,25 @@ function Qlearning(Q, policy, num_episodes, α; plotting=true, target_update_int
     plot(reward_history, title="Rewards", xlabel="Episode", show=true)
     reward_history
 end
-α, λ, tui, P0 = 0.67, 0.1, 5, 10
+λ, tui, P0 = 0.0001, 5, 10
 
-ho = @hyperopt for i=50, sampler = BlueNoiseSampler(),
-    α   = LinRange(0.1,0.99,200),
-    λ   = exp10.(LinRange(-3,3,200)),
-    # λ = 1 .- exp10.(LinRange(-4,-2,50)),
-    # tui = round.(Int, exp10.(range(0, stop=2, length=200))),
-    P0  = exp10.(range(-1, stop=3, length=200))
-    # @benchmark begin
-    m     = QuadraticModel(nx+nu; actiondims = 1:1, λ = λ, P0 = P0)
-    gridm = Grid(domain, m, splitter, initial_split =0)
-    Q     = Qfun(gridm, splitter); # Q is now our Q-function approximator
-    ϵ     = 0.5 # Initial chance of choosing random action
-    num_episodes = 100
-    decay_rate   = 0.995 # decay rate for learning rate and ϵ
-    policy       = ϵGreedyPolicy(ϵ, decay_rate, Q);
-    rh = Qlearning(Q, policy, num_episodes, α, plotting = false, target_update_interval=tui)
-    mean(rh.values[end-10:end])
-end
-
-plot(ho)
+# ho = @hyperopt for i=50, sampler = BlueNoiseSampler(),
+#     λ   = exp10.(LinRange(-3,3,200)),
+#     # λ = 1 .- exp10.(LinRange(-4,-2,50)),
+#     # tui = round.(Int, exp10.(range(0, stop=2, length=200))),
+#     P0  = exp10.(range(-1, stop=3, length=200))
+# @benchmark begin
+m     = QuadraticModel(nx+nu; actiondims = 1:1, λ = λ, P0 = P0)
+gridm = Grid(domain, m, splitter, initial_split =0)
+Q     = Qfun(gridm, splitter); # Q is now our Q-function approximator
+ϵ     = 0.5 # Initial chance of choosing random action
+num_episodes = 400
+decay_rate   = 0.995 # decay rate for learning rate and ϵ
+policy       = ϵGreedyPolicy(ϵ, decay_rate, Q);
+rh = MClearning(Q, policy, num_episodes, plotting = true, target_update_interval=tui)
+mean(rh.values[end-10:end])
+# end
+# plot(ho)
 
 # julia> maximum(ho)
 # (Real[0.67, 0.999854, 28, 6.25055], 200.0)
@@ -127,4 +138,4 @@ plot(ho)
 # gridm        = Grid(domain, m, splitter, initial_split=0)
 # Q            = Qfun(gridm, splitter);
 #
-# @time Qlearning(Q,policy, num_episodes, α, plotting = false)
+# @time MClearning(Q,policy, num_episodes, α, plotting = false)
