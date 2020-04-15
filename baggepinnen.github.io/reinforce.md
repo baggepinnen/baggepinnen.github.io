@@ -1,0 +1,124 @@
+@def title = "REINFORCE"
+@def hascode = true
+@def rss = "An implementation of the REINFORCE  algorithm in Julia"
+
+
+# Reinforcement learning with Policy gradient (REINFORCE)
+
+For an introduction to policy gradient methods, see [Levine 2017 (slides)](http://rll.berkeley.edu/deeprlcourse/f17docs/lecture_4_policy_gradient.pdf)
+
+This tutorial is available as an [iJulia notebook](https://github.com/baggepinnen/baggepinnen.github.io/blob/master/reinforce.ipynb)
+
+We start out by importing some packages. If it's your first time, you might have to install some packages using the commands in the initial comment.
+OpenAI gym is installed with instructions available at https://github.com/JuliaML/OpenAIGym.jl
+```julia
+# using Pkg
+# Pkg.add("Plots")
+# Pkg.add("BasisFunctionExpansions")
+# Pkg.add("ValueHistories")
+# Pkg.add("https://github.com/JuliaML/OpenAIGym.jl")
+
+using OpenAIGym, BasisFunctionExpansions, ValueHistories, Plots, Random, LinearAlgebra
+```
+
+If you want to perform plotting in the loop, the following function helps keeping the plot clean.
+```julia
+default(size=(1200,800)) # Set the default plot size
+function update_plot!(p; max_history = 10)
+    num_series = length(p.series_list)
+    if num_series > 1
+        if num_series > max_history
+            deleteat!(p.series_list,1:num_series-max_history)
+        end
+    end
+end
+```
+
+Next, we define an environment from the OpenAIGym framework, we'll use the [cartpole environment](https://gym.openai.com/envs/CartPole-v0/) and a function that runs an entire episode.
+```julia
+env = GymEnv("CartPole-v0")
+
+function collect_episode(ep)
+    s,a,r,s1 = Vector{Vector{Float64}}(),Vector{Float64}(),Vector{Float64}(),Vector{Vector{Float64}}()
+    for (ss,aa,rr,ss1) in ep
+        push!(s,ss)
+        push!(a,aa)
+        push!(r,rr)
+        push!(s1,ss1)
+    end
+    s,a,r,s1
+end
+```
+
+We also define a policy object that is a linear combination of radial basis functions. For this we make use of the package [`BasisFunctionExpansions.jl`](https://github.com/baggepinnen/BasisFunctionExpansions.jl). We use 4 basis functions along each dimension. Along with the policy, we define a function to calculate $\nabla_\theta \log \pi_\theta(a|s)$
+```julia
+bfe = MultiUniformRBFE([LinRange(-0.3,0.3,3) LinRange(-2,2,3) LinRange(-0.2,0.2,3) LinRange(-3.2,3.2,3)], [4,4,4,4])
+
+mutable struct Policy <: AbstractPolicy
+    θ::Vector{Float64}
+    bfe::MultiUniformRBFE
+    σ::Float64
+end
+
+(π::Policy)(s) = π.bfe(s)⋅π.θ + 0.5 # Mean of policy function
+
+function Reinforce.action(π::Policy, r, s, A)
+    π(s) + π.σ*randn() > 0.5 ? 1 : 0
+end
+
+function ∇logπ(s,a)
+    0.5/π.σ^2*(a-π(s))*π.bfe(s)
+end
+
+num_epochs       = 100
+N                = 5
+α                = 0.00001 # Initial learning rate
+const decay_rate = 0.99  # decay rate for learning rate and noise
+const γ          = 0.99  # Discounting factor
+σ                = 0.1   # Policy noise
+const π = Policy(0.001randn(size(bfe.μ,2)), bfe, σ); # π is now our policy object
+```
+
+We have now arrived at the main algorithm. We wrap it in a function for the Julia JIT complier to have it run faster.
+```julia
+gr() # Set GR as plot backend, try pyplot() if GR is not working
+function REINFORCE(π, num_epochs, N, α; plotting=true)
+    π.θ .= 0.001randn(size(bfe.μ,2)) # Reset policy parameters
+    plotting && (fig = plot(layout=2, show=true))
+    reward_history = ValueHistories.History(Float64)
+    for i = 1:num_epochs
+        local ep
+        α   *= decay_rate # Decay the learning rate
+        π.σ *= decay_rate # Decay the exploration noise
+        ∇θ   = zeros(size(π.θ)) # Gradient accumulator
+        for n = 1:N # Collect N trajectories for Expectation estimation
+            ep       = Episode(env, π)
+            s,a,r,s1 = collect_episode(ep)
+            sumr     = 0.
+            for t = length(s):-1:1 # Iterate backwards for efficient ∑r calculation
+                sumr += r[t] # Sum of rewards
+                ∇θ .+= ∇logπ(s[t],a[t]) * sumr
+            end
+            push!(reward_history, (i-1)*N+n, ep.total_reward)
+        end
+        π.θ .+= α/N * ∇θ # Take a gradient step on policy parameters
+
+        # Printing and plotting
+        i % 5 == 0 && println("Epoch: $i, reward: $(ep.total_reward)")
+        if plotting && i % 5 == 0
+            plot!(reward_history, subplot=1)
+            scatter!(π.θ, subplot=2, c=:red, title="Policy parameters")
+            update_plot!(fig[1], max_history=1)
+            update_plot!(fig[2], max_history=5)
+            gui(fig)
+        end
+    end
+    plot(reward_history, title="Rewards", xlabel="Episodes", show=true)
+end
+```
+
+We now call our function.
+```julia
+Random.seed!(1);
+REINFORCE(π, num_epochs, N, α; plotting=false)
+```
